@@ -2,7 +2,7 @@
 export async function getProfile() {
   const token = localStorage.getItem("token");
 
-  const response = await fetch("http://127.0.0.1:8000/profile", {
+  const response = await fetch("https://khushnoor-video-vr180.hf.space/profile", {
     headers: {
       "Authorization": `Bearer ${token}`,
     },
