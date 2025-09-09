@@ -47,6 +47,7 @@ function Conversation({ onLogout }) {
         { 
           headers: { "Content-Type": "multipart/form-data" }, 
           responseType: "blob",
+          timeout: 1000 * 60 * 60,
           
         }
       );
