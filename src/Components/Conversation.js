@@ -42,7 +42,7 @@ function Conversation({ onLogout }) {
     try {
       console.log("Starting conversion...");
       const response = await axios.post(
-        "http://127.0.0.1:8000/convert-2d-to-vr180",
+        "https://khushnoor-video-vr180.hf.space/convert-2d-to-vr180",
         formData,
         { 
           headers: { "Content-Type": "multipart/form-data" }, 
