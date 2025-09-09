@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import axios from "axios";
 import Navbar from "./Navbar";
 
@@ -7,6 +7,28 @@ function Conversation({ onLogout }) {
   const [processedVideos, setProcessedVideos] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  // Load saved videos from localStorage
+  useEffect(() => {
+    const savedVideos = localStorage.getItem('convertedVideos');
+    if (savedVideos) {
+      try {
+        const videos = JSON.parse(savedVideos);
+        setProcessedVideos(videos);
+      } catch (error) {
+        console.error('Error loading saved videos:', error);
+      }
+    }
+  }, []);
+
+  // Save videos to localStorage
+  useEffect(() => {
+    if (processedVideos.length > 0) {
+      localStorage.setItem('convertedVideos', JSON.stringify(processedVideos));
+    } else {
+      localStorage.removeItem('convertedVideos');
+    }
+  }, [processedVideos]);
 
   const handleUpload = async () => {
     if (!file) return alert("Please upload a video!");
@@ -20,46 +42,77 @@ function Conversation({ onLogout }) {
     try {
       console.log("Starting conversion...");
       const response = await axios.post(
-        "http://127.0.0.1:8001/convert-2d-to-vr180",
+        "http://127.0.0.1:8000/convert-2d-to-vr180",
         formData,
         { 
           headers: { "Content-Type": "multipart/form-data" }, 
           responseType: "blob",
-         
+          
         }
       );
 
       console.log("Conversion complete, creating URL...");
-      const url = window.URL.createObjectURL(new Blob([response.data], { type: "video/mp4" }));
       
-      // Test if the video can be played
+      // Create blob with proper MIME type
+      const blob = new Blob([response.data], { type: "video/mp4" });
+      const url = URL.createObjectURL(blob);
+      
+      // Create video element to test playback
       const video = document.createElement("video");
       video.src = url;
-      video.onloadeddata = () => {
-        console.log("Video loaded successfully, duration:", video.duration);
-        setProcessedVideos(prev => [...prev, { url, name: file.name }]);
-      };
-      video.onerror = () => {
-        console.error("Video playback error");
-        setError("The converted video cannot be played in the browser. Please download it instead.");
-        setProcessedVideos(prev => [...prev, { url, name: file.name, playable: false }]);
-      };
       
-      // Load the video to test it
-      video.load();
+      return new Promise((resolve) => {
+        video.onloadedmetadata = () => {
+          console.log("Video metadata loaded, duration:", video.duration);
+          
+          const videoData = {
+            url,
+            name: file.name,
+            originalName: file.name,
+            timestamp: new Date().toLocaleString(),
+            size: response.data.size,
+            duration: video.duration,
+            playable: true,
+            blob: blob // Keep reference to blob for better handling
+          };
+          
+          setProcessedVideos(prev => [...prev, videoData]);
+          resolve(true);
+        };
+        
+        video.onerror = () => {
+          console.error("Video playback error - may be encoding issue");
+          
+          const videoData = {
+            url,
+            name: file.name,
+            originalName: file.name,
+            timestamp: new Date().toLocaleString(),
+            size: response.data.size,
+            playable: false,
+            blob: blob
+          };
+          
+          setError("Video converted successfully but may have playback issues in browser. Download works perfectly!");
+          setProcessedVideos(prev => [...prev, videoData]);
+          resolve(false);
+        };
+        
+        // Load the video to trigger events
+        video.load();
+      });
 
     } catch (error) {
       console.error("Error converting video:", error);
       let errorMessage = "Failed to process video.";
       
       if (error.response) {
-        // Server responded with error status
         errorMessage = `Server error: ${error.response.status} - ${error.response.data}`;
       } else if (error.request) {
-        // Request was made but no response received
-        errorMessage = "No response from server. Please check if the backend is running.";
+        errorMessage = "No response from server. Please check if the backend is running on port 8000.";
+      } else if (error.code === 'ECONNABORTED') {
+        errorMessage = "Request timeout. The video may be too long or server is busy.";
       } else {
-        // Something else happened
         errorMessage = error.message;
       }
       
@@ -70,9 +123,62 @@ function Conversation({ onLogout }) {
     }
   };
 
+  const handleDownload = (video) => {
+    // Create a download link from the blob
+    const url = URL.createObjectURL(video.blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `vr180-${video.originalName.replace(/\.[^/.]+$/, "")}.mp4`;
+    document.body.appendChild(a);
+    a.click();
+    
+    // Cleanup
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+    }, 100);
+  };
+
+  const handleDelete = (index) => {
+    const newVideos = [...processedVideos];
+    const deletedVideo = newVideos.splice(index, 1)[0];
+    
+    // Clean up the object URL and blob
+    URL.revokeObjectURL(deletedVideo.url);
+    if (deletedVideo.blob) {
+      deletedVideo.blob = null; // Help GC
+    }
+    
+    setProcessedVideos(newVideos);
+  };
+
+  const clearAllVideos = () => {
+    // Clean up all object URLs and blobs
+    processedVideos.forEach(video => {
+      URL.revokeObjectURL(video.url);
+      video.blob = null;
+    });
+    
+    setProcessedVideos([]);
+  };
+
+  const formatFileSize = (bytes) => {
+    if (!bytes) return 'Unknown size';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  const formatDuration = (seconds) => {
+    if (!seconds) return 'Unknown duration';
+    const mins = Math.floor(seconds / 60);
+    const secs = Math.floor(seconds % 60);
+    return `${mins}:${secs.toString().padStart(2, '0')}`;
+  };
+
   const bgStyle = {
-    backgroundImage:
-      "url('https://plus.unsplash.com/premium_photo-1661764248803-c23d7ec546ce?w=500&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1yZWxhdGVkfDQ2fHx8ZW58MHx8fHx8')",
+    backgroundImage: "url('https://plus.unsplash.com/premium_photo-1661764248803-c23d7ec546ce?w=500&auto=format&fit=crop&q=60&ixlib=rb-4.1.0&ixid=M3wxMjA3fDB8MHxwaG90by1yZWxhdGVkfDQ2fHx8ZW58MHx8fHx8')",
     backgroundSize: "cover",
     backgroundPosition: "center",
     minHeight: "100vh",
@@ -82,92 +188,108 @@ function Conversation({ onLogout }) {
     <div style={bgStyle} className="text-white">
       <Navbar onLogout={onLogout} />
 
-      <main
-        className="d-flex justify-content-center align-items-center"
-        style={{ minHeight: "calc(100vh - 56px)" }}
-      >
-        <div
-          className="bg-dark bg-opacity-75 p-5 rounded shadow-lg text-center"
-          style={{ maxWidth: "600px", width: "100%" }}
-        >
-          <h2 className="mb-4">🎥 2D to VR180 Conversion</h2>
+      <main className="d-flex justify-content-center align-items-center" style={{ minHeight: "calc(100vh - 56px)" }}>
+        <div className="bg-dark bg-opacity-75 p-5 rounded shadow-lg" style={{ maxWidth: "800px", width: "100%", maxHeight: "90vh", overflowY: "auto" }}>
+          <h2 className="mb-4 text-center">🎥 2D to VR180 Conversion</h2>
 
-          <input
-            type="file"
-            accept="video/*"
-            className="form-control mb-3"
-            onChange={(e) => setFile(e.target.files[0])}
-          />
+          {/* Upload Section */}
+          <div className="mb-4 p-3 bg-dark rounded">
+            <input
+              type="file"
+              accept="video/*"
+              className="form-control mb-3"
+              onChange={(e) => setFile(e.target.files[0])}
+              disabled={loading}
+            />
 
-          <button
-            className="btn btn-primary mb-3 w-100"
-            onClick={handleUpload}
-            disabled={loading}
-          >
-            {loading ? "Processing... (This may take several minutes)" : "Upload & Convert to VR180"}
-          </button>
+            <button
+              className="btn btn-primary w-100"
+              onClick={handleUpload}
+              disabled={loading}
+            >
+              {loading ? (
+                <>
+                  <span className="spinner-border spinner-border-sm me-2" />
+                  Processing... (This may take several minutes)
+                </>
+              ) : (
+                "Upload & Convert to VR180"
+              )}
+            </button>
+          </div>
 
           {error && (
-            <div className="alert alert-danger">
-              <strong>Error:</strong> {error}
-              <br />
-              <small>Please try downloading the video instead of playing it.</small>
+            <div className="alert alert-warning">
+              <strong>Note:</strong> {error}
             </div>
           )}
 
-          {/* Display all processed videos */}
-          {processedVideos.map((video, index) => (
-            <div key={index} className="mb-4">
-              <h5>Converted Video {index + 1}</h5>
-              <p className="text-muted">
-                <small>Original: {video.name}</small>
-              </p>
-              
-              {video.playable === false && (
-                <div className="alert alert-warning">
-                  <small>This video may not play in browser. Please download it.</small>
-                </div>
-              )}
-              
-              <video
-                src={video.url}
-                controls
-                style={{ width: "100%", borderRadius: "8px" }}
-                className="mb-2"
-              />
-              
-              <div className="d-flex gap-2">
-                <a
-                  href={video.url}
-                  download={`vr180-converted-${index + 1}.mp4`}
-                  className="btn btn-success flex-fill"
-                >
-                  Download VR180 Video
-                </a>
-                <button 
-                  className="btn btn-outline-light"
-                  onClick={() => {
-                    setProcessedVideos(prev => prev.filter((_, i) => i !== index));
-                    URL.revokeObjectURL(video.url);
-                  }}
-                >
-                  Remove
+          {/* Converted Videos Section */}
+          {processedVideos.length > 0 && (
+            <div className="mt-4">
+              <div className="d-flex justify-content-between align-items-center mb-3">
+                <h4>Converted Videos ({processedVideos.length})</h4>
+                <button className="btn btn-outline-danger btn-sm" onClick={clearAllVideos}>
+                  Clear All
                 </button>
               </div>
-            </div>
-          ))}
 
-          {processedVideos.length > 0 && (
-            <div className="mt-3">
-              <button 
-                className="btn btn-outline-danger btn-sm"
-                onClick={() => {
-                  processedVideos.forEach(video => URL.revokeObjectURL(video.url));
-                  setProcessedVideos([]);
-                }}
-              >
-                Clear All Videos
-              </button>
+              <div className="row">
+                {processedVideos.map((video, index) => (
+                  <div key={index} className="col-12 mb-4">
+                    <div className="card bg-dark text-white">
+                      <div className="card-body">
+                        <h6 className="card-title">
+                          {video.originalName}
+                          <small className="text-muted ms-2">
+                            ({formatFileSize(video.size)} • {formatDuration(video.duration)})
+                          </small>
+                        </h6>
+                        <p className="text-muted small mb-2">
+                          Converted: {video.timestamp}
+                        </p>
+                        
+                        {!video.playable && (
+                          <div className="alert alert-warning mb-3">
+                            <small style={{color:"white"    }}>⚠️ Video may not play in browser. Download works perfectly!</small>
+                          </div>
+                        )}
+                        
+                        <video
+                          src={video.url}
+                          controls
+                          style={{ width: "100%", borderRadius: "8px", maxHeight: "300px" }}
+                          className="mb-3"
+                          preload="metadata"
+                        />
+                        
+                        <div className="d-flex gap-2">
+                          <button
+                            className="btn btn-success flex-fill"
+                            onClick={() => handleDownload(video)}
+                          >
+                            ⬇️ Download VR180 Video
+                          </button>
+                          <button
+                            className="btn btn-outline-light"
+                            onClick={() => handleDelete(index)}
+                          >
+                            🗑️ Delete
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Empty State */}
+          {processedVideos.length === 0 && !loading && (
+            <div className="text-center text-muted py-4">
+              <p style={{color:"white"    }}>No converted videos yet. Upload a video to get started!</p>
+              <small style={{color:"white"    }}>Videos will be saved and persist across page refreshes</small>
             </div>
           )}
         </div>
