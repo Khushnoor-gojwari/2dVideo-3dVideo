@@ -8,7 +8,7 @@ function Feedback({ onLogout }) {
 
   const fetchFeedback = async () => {
     try {
-      const res = await axios.get("http://127.0.0.1:8000/feedback");
+      const res = await axios.get("https://khushnoor-video-vr180.hf.space/feedback");
       setFeedbackList(res.data);
     } catch (err) {
       console.error("Error fetching feedback:", err);
@@ -19,7 +19,7 @@ function Feedback({ onLogout }) {
     if (!feedback.trim()) return alert("Feedback cannot be empty");
 
     try {
-      await axios.post("http://127.0.0.1:8000/feedback", {
+      await axios.post("https://khushnoor-video-vr180.hf.space/feedback", {
         username,
         text: feedback,
       });
