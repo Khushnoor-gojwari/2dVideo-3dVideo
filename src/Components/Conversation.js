@@ -210,7 +210,7 @@ evtSource.onmessage = (e) => {
               type="file"
               accept="video/*"
               className="form-control mb-3"
-              onChange={(e) => setFile(e.target.fi les[0])}
+              onChange={(e) => setFile(e.target.files[0])}
               disabled={loading}
             />
 
