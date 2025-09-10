@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from "react";
 import axios from "axios";
 import Navbar from "./Navbar";
+import { EventSourcePolyfill } from "event-source-polyfill";
 
 function Conversation({ onLogout }) {
   const [file, setFile] = useState(null);
@@ -29,100 +30,110 @@ function Conversation({ onLogout }) {
       localStorage.removeItem('convertedVideos');
     }
   }, [processedVideos]);
+const handleUpload = async () => {
+  if (!file) return alert("Please upload a video!");
 
-  const handleUpload = async () => {
-    if (!file) return alert("Please upload a video!");
-    
-    setError(null);
-    setLoading(true);
+  setError(null);
+  setLoading(true);
 
+  try {
     const formData = new FormData();
     formData.append("file", file);
 
-    try {
-      console.log("Starting conversion...");
-      const response = await axios.post(
-        "https://khushnoor-video-vr180.hf.space/convert-2d-to-vr180",
-        formData,
-        { 
-          headers: { "Content-Type": "multipart/form-data" }, 
-          responseType: "blob",
-          timeout: 1000 * 60 * 60,
-          
-        }
-      );
+    // Create EventSource for streaming endpoint
+    const evtSource = new EventSourcePolyfill(
+      "https://khushnoor-video-vr180.hf.space/convert-2d-to-vr180-stream",
+      {
+        headers: { "Content-Type": "multipart/form-data" },
+        method: "POST",
+        body: formData
+      }
+    );
 
-      console.log("Conversion complete, creating URL...");
-      
-      // Create blob with proper MIME type
-      const blob = new Blob([response.data], { type: "video/mp4" });
-      const url = URL.createObjectURL(blob);
-      
-      // Create video element to test playback
-      const video = document.createElement("video");
-      video.src = url;
-      
-      return new Promise((resolve) => {
-        video.onloadedmetadata = () => {
-          console.log("Video metadata loaded, duration:", video.duration);
-          
-          const videoData = {
-            url,
-            name: file.name,
-            originalName: file.name,
-            timestamp: new Date().toLocaleString(),
-            size: response.data.size,
-            duration: video.duration,
-            playable: true,
-            blob: blob // Keep reference to blob for better handling
-          };
-          
-          setProcessedVideos(prev => [...prev, videoData]);
-          resolve(true);
+    let jobId = null;
+    let processedFrames = 0;
+
+evtSource.onmessage = (e) => {
+  const data = JSON.parse(e.data);
+
+  if (!jobId && data.job_id) jobId = data.job_id;
+
+  if (data.status === "processing" && data.frame) {
+    processedFrames = data.frame;
+    console.log(`Job ${jobId}: processed frame ${processedFrames}`);
+
+    // Update the last video object with progress
+    setProcessedVideos(prev => {
+      if (prev.length === 0) {
+        // If no video yet, create placeholder
+        return [{
+          name: file.name,
+          originalName: file.name,
+          timestamp: new Date().toLocaleString(),
+          size: 0,
+          duration: 0,
+          playable: false,
+          job_id: jobId,
+          progress: processedFrames,
+          blob: null
+        }];
+      } else {
+        const updated = [...prev];
+        updated[updated.length - 1].progress = processedFrames;
+        return updated;
+      }
+    });
+  }
+
+  if (data.status === "completed") {
+    console.log(`Job ${jobId} completed! Output: ${data.output}`);
+
+    // Fetch the final video as blob
+    fetch(data.output)
+      .then(res => res.blob())
+      .then(blob => {
+        const url = URL.createObjectURL(blob);
+        const videoData = {
+          url,
+          name: file.name,
+          originalName: file.name,
+          timestamp: new Date().toLocaleString(),
+          size: blob.size,
+          duration: 0,
+          playable: true,
+          job_id: jobId,
+          progress: processedFrames,
+          blob
         };
-        
-        video.onerror = () => {
-          console.error("Video playback error - may be encoding issue");
-          
-          const videoData = {
-            url,
-            name: file.name,
-            originalName: file.name,
-            timestamp: new Date().toLocaleString(),
-            size: response.data.size,
-            playable: false,
-            blob: blob
-          };
-          
-          setError("Video converted successfully but may have playback issues in browser. Download works perfectly!");
-          setProcessedVideos(prev => [...prev, videoData]);
-          resolve(false);
-        };
-        
-        // Load the video to trigger events
-        video.load();
+        setProcessedVideos(prev => [...prev.slice(0, -1), videoData]); // replace placeholder with final video
+        setLoading(false);
       });
 
-    } catch (error) {
-      console.error("Error converting video:", error);
-      let errorMessage = "Failed to process video.";
-      
-      if (error.response) {
-        errorMessage = `Server error: ${error.response.status} - ${error.response.data}`;
-      } else if (error.request) {
-        errorMessage = "No response from server. Please check if the backend is running on port 8000.";
-      } else if (error.code === 'ECONNABORTED') {
-        errorMessage = "Request timeout. The video may be too long or server is busy.";
-      } else {
-        errorMessage = error.message;
-      }
-      
-      setError(errorMessage);
-      alert(errorMessage);
-    } finally {
+    evtSource.close();
+  }
+
+  if (data.status === "error") {
+    setError(`Job ${jobId} failed: ${data.error}`);
+    setLoading(false);
+    evtSource.close();
+  }
+};
+
+
+    evtSource.onerror = (err) => {
+      console.error("SSE error:", err);
+      setError("Streaming connection lost. Try again.");
       setLoading(false);
-    }
-  };
+      evtSource.close();
+    };
+
+  } catch (err) {
+    console.error("Upload error:", err);
+    setError("Failed to start conversion.");
+    setLoading(false);
+  }
+};
+
 
   const handleDownload = (video) => {
     // Create a download link from the blob
@@ -199,7 +210,7 @@ function Conversation({ onLogout }) {
               type="file"
               accept="video/*"
               className="form-control mb-3"
-              onChange={(e) => setFile(e.target.files[0])}
+              onChange={(e) => setFile(e.target.fi les[0])}
               disabled={loading}
             />
 
@@ -210,8 +221,8 @@ function Conversation({ onLogout }) {
             >
               {loading ? (
                 <>
-                  <span className="spinner-border spinner-border-sm me-2" />
-                  Processing... (This may take several minutes)
+                 <span className="spinner-border spinner-border-sm me-2" />
+                  Processing... (Frame: {processedVideos[processedVideos.length - 1]?.progress || 0})
                 </>
               ) : (
                 "Upload & Convert to VR180"
