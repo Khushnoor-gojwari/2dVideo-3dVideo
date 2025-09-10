@@ -33,66 +33,80 @@ function Conversation({ onLogout }) {
   }, [processedVideos]);
 
   // Poll job progress every 3 seconds
-  useEffect(() => {
-    let interval;
-    if (jobId) {
-      interval = setInterval(async () => {
-        try {
-          const res = await axios.get(`https://khushnoor-video-vr180.hf.space/job-status/${jobId}`, {
-            responseType: "blob",
-          });
-          if (res.data instanceof Blob && res.data.type === "video/mp4") {
-            // Job done, create URL and save video
-            const blob = res.data;
-            const url = URL.createObjectURL(blob);
-            const video = document.createElement("video");
-            video.src = url;
+useEffect(() => {
+  if (!jobId) return;
 
-            video.onloadedmetadata = () => {
-              const videoData = {
-                url,
-                name: file.name,
-                originalName: file.name,
-                timestamp: new Date().toLocaleString(),
-                size: blob.size,
-                duration: video.duration,
-                playable: true,
-                blob,
-              };
-              setProcessedVideos(prev => [...prev, videoData]);
-              setLoading(false);
-              setJobId(null);
-              setProgress(0);
-            };
+  const interval = setInterval(async () => {
+    try {
+      const res = await axios.get(`https://khushnoor-video-vr180.hf.space/job-status/${jobId}`);
+      const data = res.data;
 
-            video.onerror = () => {
-              const videoData = {
-                url,
-                name: file.name,
-                originalName: file.name,
-                timestamp: new Date().toLocaleString(),
-                size: blob.size,
-                playable: false,
-                blob,
-              };
-              setProcessedVideos(prev => [...prev, videoData]);
-              setError("Video converted but may not play in browser. Download works.");
-              setLoading(false);
-              setJobId(null);
-              setProgress(0);
-            };
+      if (data.status === "done" && data.output_path) {
+        clearInterval(interval); // stop polling first
 
-            video.load();
-          } else if (res.data.progress) {
-            setProgress(res.data.progress);
-          }
-        } catch (err) {
-          console.error("Error fetching job status:", err);
-        }
-      }, 3000);
+        // Fetch actual video from its URL
+        const videoRes = await axios.get(data.output_path, { responseType: "blob" });
+        const blob = videoRes.data;
+        const url = URL.createObjectURL(blob);
+
+        const videoEl = document.createElement("video");
+        videoEl.src = url;
+
+        videoEl.onloadedmetadata = () => {
+          setProcessedVideos(prev => [
+            ...prev,
+            {
+              url,
+              name: file.name,
+              originalName: file.name,
+              timestamp: new Date().toLocaleString(),
+              size: blob.size,
+              duration: videoEl.duration,
+              playable: true,
+              blob,
+            }
+          ]);
+          setLoading(false);
+          setJobId(null);
+          setProgress(0);
+        };
+
+        videoEl.onerror = () => {
+          setProcessedVideos(prev => [
+            ...prev,
+            {
+              url,
+              name: file.name,
+              originalName: file.name,
+              timestamp: new Date().toLocaleString(),
+              size: blob.size,
+              playable: false,
+              blob,
+            }
+          ]);
+          setError("Video converted but may not play in browser. Download works.");
+          setLoading(false);
+          setJobId(null);
+          setProgress(0);
+        };
+
+        videoEl.load();
+
+      } else if (data.progress !== undefined) {
+        setProgress(data.progress);
+      }
+
+    } catch (err) {
+      console.error("Error fetching job status:", err);
+      clearInterval(interval);
+      setLoading(false);
     }
-    return () => clearInterval(interval);
-  }, [jobId, file]);
+  }, 3000);
+
+  return () => clearInterval(interval);
+
+}, [jobId]);
+
 
   const handleUpload = async () => {
     if (!file) return alert("Please upload a video!");
